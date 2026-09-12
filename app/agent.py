@@ -13,7 +13,7 @@ from app.risk_model import RiskModel
 
 
 class FinancialAgent:
-    """Fast hybrid agent: deterministic finance first, optional LLM only for explanation."""
+    """Fast deterministic financial agent with optional reasoning components kept off the hot path."""
 
     def __init__(self, dataset_dir: str | Path = "dataset"):
         self.loader = DataLoader(dataset_dir)
@@ -38,10 +38,10 @@ class FinancialAgent:
 
     @staticmethod
     def _method_map(value: str) -> str:
-        s = str(value).lower().strip()
+        s = str(value).lower().strip().replace(" ", "_")
         if "install" in s: return "installments"
         if "partial" in s: return "partial_payment"
-        if "full" in s: return "full_payment"
+        if "full" in s or s == "cash": return "full_payment"
         return s
 
     def _option_candidates(self, request: pd.Series, accepted: set[str]) -> list[dict[str, Any]]:
@@ -58,9 +58,9 @@ class FinancialAgent:
             if not payments or payments[-1].date > deadline:
                 continue
             sim = self.engine.simulate(request.user_id, request.request_date, payments)
-            if sim.safe:
-                candidates.append({"kind": method, "option": opt, "payments": payments, "sim": sim,
-                                   "fee": float(opt.financing_fee), "total": float(opt.total_payable_amount), "changes": []})
+            candidates.append({"kind": method, "option": opt, "payments": payments, "sim": sim,
+                               "fee": float(opt.financing_fee) if pd.notna(opt.get("financing_fee")) else 0.0,
+                               "total": float(opt.total_payable_amount), "changes": []})
         return candidates
 
     def _full_candidate(self, request: pd.Series, amount: float) -> dict[str, Any]:
@@ -76,8 +76,6 @@ class FinancialAgent:
             return None
         payments = [Payment(pd.Timestamp(request.request_date), amount_today, "partial"), Payment(date_full, float(request.requested_amount) - amount_today, "partial")]
         sim = self.engine.simulate(request.user_id, request.request_date, payments)
-        if not sim.safe:
-            return None
         return {"kind": "partial_payment", "option": None, "payments": payments, "sim": sim,
                 "fee": 0.0, "total": float(request.requested_amount), "changes": []}
 
@@ -85,14 +83,14 @@ class FinancialAgent:
         changes = self.engine.flexible_changes(request.user_id, request.request_date, float(request.requested_amount), request.desired_completion_date)
         if not changes:
             return []
-
         unique: dict[str, dict[str, Any]] = {}
         for c in changes:
             unique[str(c["event_id"])] = c
         changes = sorted(unique.values(), key=lambda c: float(c["amount"]) - float(c["new_amount"]), reverse=True)
 
-        # Try all single changes first. Only if none works do we enter the
-        # bounded pair/triple search, preventing combinatorial explosion.
+        if base["sim"].safe:
+            return [{**base, "change_count": 0}]
+
         singles: list[dict[str, Any]] = []
         for change in changes:
             sim = self.engine.adjusted_simulation(request.user_id, request.request_date, base["payments"], [change])
@@ -124,20 +122,22 @@ class FinancialAgent:
         requested = float(request.requested_amount)
         today_safe = self.engine.max_safe_today(request.user_id, request.request_date, requested)
         earliest = self.engine.earliest_full_payment(request.user_id, request.request_date, requested, request.desired_completion_date)
-        candidates: list[dict[str, Any]] = []
 
+        base_candidates: list[dict[str, Any]] = []
         full = self._full_candidate(request, requested)
-        if full["sim"].safe and "full_payment" in accepted:
-            candidates.append(full)
-        candidates.extend(self._option_candidates(request, accepted))
+        if "full_payment" in accepted:
+            base_candidates.append(full)
+        base_candidates.extend(self._option_candidates(request, accepted))
         partial = self._partial_candidate(request, today_safe, earliest)
         if partial and "partial_payment" in accepted:
-            candidates.append(partial)
-        if not candidates and "full_payment" in accepted:
-            candidates.extend(self._change_candidates(request, full))
+            base_candidates.append(partial)
 
-        candidate_summary = [{"method": c["kind"], "total": c["total"], "safe": c["sim"].safe,
-                              "minimum_balance": c["sim"].minimum_balance, "changes": len(c.get("changes", []))} for c in candidates]
+        candidates: list[dict[str, Any]] = []
+        for base in base_candidates:
+            if base["sim"].safe:
+                candidates.append(base)
+            else:
+                candidates.extend(self._change_candidates(request, base))
 
         if candidates:
             best = min(candidates, key=lambda x: self._rank(x, request))
@@ -167,11 +167,5 @@ class FinancialAgent:
                       "payment_plan": "none", "earliest_date_for_full_payment": "" if earliest is None else f"{earliest:%Y-%m-%d}",
                       "spending_changes_needed": "none", "decision_explanation": "Do not proceed. No eligible plan completes the request safely while maintaining the minimum balance."}
 
-        # Competition path: no LLM round-trip. The final explanation is built
-        # from verified facts, so the result is deterministic and fast.
-        self.audit_traces[str(request.request_id)] = {
-            "candidate_count": len(candidates),
-            "verified": True,
-            "llm_trace": [],
-        }
+        self.audit_traces[str(request.request_id)] = {"candidate_count": len(candidates), "verified": True, "llm_trace": []}
         return result
