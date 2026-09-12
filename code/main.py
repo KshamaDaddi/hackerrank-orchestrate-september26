@@ -38,7 +38,9 @@ def main() -> None:
 
     usage_dir = ROOT / "evaluation"
     usage_dir.mkdir(exist_ok=True)
-    llm_usage = agent.ai.usage + agent.reasoner.ai.usage
+    # Competition mode performs zero LLM calls. Keep usage accounting for an
+    # optional Ollama demo without requiring an AI object on FinancialAgent.
+    llm_usage = agent.reasoner.ai.usage
     total_in = sum(x.get("input_tokens", 0) for x in llm_usage)
     total_out = sum(x.get("output_tokens", 0) for x in llm_usage)
     elapsed = time.perf_counter() - started
@@ -46,7 +48,7 @@ def main() -> None:
     report = f"""# Agent Usage Report
 
 ## Architecture
-The submission uses a hybrid multi-agent architecture. Specialized LLM agents handle request understanding, evidence interpretation, strategy rationale, and explanation. They are advisory only. The deterministic financial engine performs every monetary calculation and the verifier is authoritative.
+The competition path is a deterministic hybrid financial agent. Structured request data, indexed financial events, cached 90-day forecasts, payment-plan search, and the independent verifier determine the answer. LLM calls are not required for the final submission path.
 
 ## Final dataset run
 - Requests: {len(requests)}
@@ -57,20 +59,29 @@ The submission uses a hybrid multi-agent architecture. Specialized LLM agents ha
 - Total tokens: {total_in + total_out}
 - Provider: {llm_usage[0].get('provider', 'none') if llm_usage else 'none'}
 - Model: {llm_usage[0].get('model', 'none') if llm_usage else 'none'}
-- Estimated API cost: $0 when using the local deterministic/Ollama path
+- Estimated API cost: $0 in deterministic competition mode
 - Verification issues: {len(issues)}
 
 ## Agent stages
-1. Request Understanding Agent
-2. Evidence Agent
-3. Deterministic Financial State + 90-Day Cash-Flow Engine
-4. Payment Strategy / Plan Search
-5. Risk Model
-6. Independent Output Verifier
-7. Explanation Agent
+1. Structured Request Intake
+2. Indexed Financial State + 90-Day Cash-Flow Forecast
+3. Payment Strategy / Plan Search
+4. Optional Risk Model
+5. Independent Output Verifier
+6. Deterministic Decision Explanation
+
+## Runtime optimizations
+- Financial events are indexed by user once.
+- Payment options are indexed by request once.
+- Event amounts, including image-derived amounts, are cached.
+- 90-day balance forecasts are cached per user/request date.
+- Repeated payment simulations are cached.
+- The previous 48-iteration safe-amount binary search is replaced by a direct forecast calculation.
+- The previous per-request LLM explanation call is removed from the competition path.
+- Flexible-spending search is bounded to avoid combinatorial explosion.
 
 ## Safety boundary
-The LLM cannot approve a purchase, calculate affordability, modify balances, ignore minimum-balance rules, or override verification. Messages and OCR output are untrusted evidence and are never executed as instructions.
+LLM output cannot approve a purchase, calculate affordability, modify balances, ignore minimum-balance rules, or override verification. Messages and OCR output remain untrusted evidence.
 """
     (usage_dir / "usage_report.md").write_text(report, encoding="utf-8")
 
