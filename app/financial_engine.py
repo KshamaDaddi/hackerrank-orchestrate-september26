@@ -70,6 +70,17 @@ class FinancialEngine:
                 return lookup[name.lower()]
         return None
 
+    @staticmethod
+    def _normalize_method(value: Any) -> str:
+        s = str(value).lower().strip().replace(" ", "_")
+        if "install" in s:
+            return "installments"
+        if "partial" in s:
+            return "partial_payment"
+        if "full" in s or s in {"cash", "pay_now", "pay_today"}:
+            return "full_payment"
+        return s
+
     def profile(self, user_id: str) -> pd.Series:
         row = self._profiles_by_user.get(str(user_id))
         if row is None:
@@ -77,7 +88,6 @@ class FinancialEngine:
         return row
 
     def _build_message_overrides(self) -> dict[str, dict[str, Any]]:
-        """Resolve explicit message amendments/cancellations tied to supplied events."""
         result: dict[str, dict[str, Any]] = {}
         if self.messages.empty or "related_event_id" not in self.messages.columns:
             return result
@@ -92,7 +102,6 @@ class FinancialEngine:
                 item["cancelled"] = True
             if re.search(r"\b(settled|confirmed|approved|completed)\b", text):
                 item["force_confirmed"] = True
-            # Explicit amount amendments in the message take precedence over an estimate.
             if re.search(r"\b(amend|amended|updated|update|changed|change|correct|correction|new amount)\b", text):
                 nums = re.findall(r"(?<![A-Za-z])\d[\d,]*(?:\.\d+)?", text)
                 if nums:
@@ -103,7 +112,6 @@ class FinancialEngine:
         return result
 
     def _rebuild_event_index(self) -> None:
-        """Apply message-level lifecycle overrides and index events by user."""
         rows = []
         for _, row in self.events.iterrows():
             eid = str(row.event_id)
@@ -118,10 +126,7 @@ class FinancialEngine:
                 r["amount"] = float(override["amount"])
             rows.append(r)
         self.events = pd.DataFrame(rows, columns=self.events.columns) if rows else self.events.iloc[0:0].copy()
-        self._events_by_user = {
-            str(user_id): group.sort_values("event_date")
-            for user_id, group in self.events.groupby("user_id", sort=False)
-        }
+        self._events_by_user = {str(user_id): group.sort_values("event_date") for user_id, group in self.events.groupby("user_id", sort=False)}
 
     def _user_events(self, user_id: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
         e = self._events_by_user.get(str(user_id))
@@ -130,16 +135,13 @@ class FinancialEngine:
         return e[(e.event_date >= start) & (e.event_date <= end)]
 
     def _fx_rate(self, date: pd.Timestamp, from_currency: str, to_currency: str) -> float:
-        src = str(from_currency).upper().strip()
-        dst = str(to_currency).upper().strip()
+        src, dst = str(from_currency).upper().strip(), str(to_currency).upper().strip()
         if not src or not dst or src == dst:
             return 1.0
         key = (f"{pd.Timestamp(date).date()}", src, dst)
         if key in self._fx_cache:
             return self._fx_cache[key]
         df = self.exchange_rates
-        if df.empty:
-            raise ValueError(f"Missing exchange rate data for {src}->{dst}")
         date_col = self._first_existing(df.columns, ("rate_date", "date", "exchange_rate_date"))
         from_col = self._first_existing(df.columns, ("from_currency", "source_currency", "base_currency"))
         to_col = self._first_existing(df.columns, ("to_currency", "target_currency", "quote_currency"))
@@ -152,7 +154,6 @@ class FinancialEngine:
             rate = float(exact.iloc[0][rate_col])
             self._fx_cache[key] = rate
             return rate
-        # Support an inverse supplied rate without inventing a live rate.
         inverse = df[(dates == pd.Timestamp(date).date()) & (df[from_col].astype(str).str.upper() == dst) & (df[to_col].astype(str).str.upper() == src)]
         if not inverse.empty:
             rate = 1.0 / float(inverse.iloc[0][rate_col])
@@ -235,7 +236,6 @@ class FinancialEngine:
             ending = float(base_balances[-1]) - sum(payment_by_day.values()) if base_balances else float(p["current_available_balance"])
             shortfall = max(0.0, minimum_required - minimum)
             return Simulation(shortfall <= 1e-7, minimum, ending, shortfall)
-
         events = self._user_events(user_id, dates[0], dates[-1])
         balance = float(p["current_available_balance"])
         minimum = balance
@@ -289,7 +289,7 @@ class FinancialEngine:
         return [Payment(first + timedelta(days=i * freq), amount, str(option.payment_option_id)) for i in range(n)]
 
     def accepted_methods(self, profile: pd.Series) -> set[str]:
-        return self._cats(profile.payment_methods_user_will_consider)
+        return {self._normalize_method(x) for x in self._cats(profile.payment_methods_user_will_consider)}
 
     def max_safe_today(self, user_id: str, request_date: str, requested: float) -> float:
         _, balances = self._forecast(user_id, request_date)
