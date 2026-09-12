@@ -45,10 +45,19 @@ class OutputVerifier:
     def _matches_option(self, request_id: str, plan: str) -> bool:
         rows = self.data["payment_options"][self.data["payment_options"].request_id.eq(request_id)]
         for _, opt in rows.iterrows():
-            first = pd.Timestamp(opt.first_payment_date)
-            freq = int(opt.payment_frequency_days); n = int(opt.number_of_payments); amount = float(opt.payment_amount)
-            expected = "|".join(f"{(first + timedelta(days=i*freq)):%Y-%m-%d}:{amount:.2f}" for i in range(n))
-            if expected == plan: return True
+            try:
+                if any(pd.isna(opt.get(k)) for k in ("first_payment_date", "payment_frequency_days", "number_of_payments", "payment_amount")):
+                    continue
+                first = pd.Timestamp(opt.first_payment_date)
+                freq = int(opt.payment_frequency_days)
+                n = int(opt.number_of_payments)
+                amount = float(opt.payment_amount)
+                if n <= 0 or freq < 0 or not math.isfinite(amount):
+                    continue
+                expected = "|".join(f"{(first + timedelta(days=i*freq)):%Y-%m-%d}:{amount:.2f}" for i in range(n))
+                if expected == plan: return True
+            except (TypeError, ValueError, OverflowError):
+                continue
         return False
 
     def verify(self, requests: pd.DataFrame, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
