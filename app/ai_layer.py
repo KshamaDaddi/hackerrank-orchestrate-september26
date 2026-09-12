@@ -26,14 +26,15 @@ class AIInterpreter:
         except requests.RequestException:
             return False
 
-    def ask(self, system: str, user: str) -> str | None:
+    def ask(self, system: str, user: str, model: str | None = None) -> str | None:
         if not self.available():
             return None
+        chosen_model = model or self.model
         prompt = f"SYSTEM:\n{system}\n\nUSER DATA:\n{user}"
         try:
             r = requests.post(
                 f"{self.base_url}/api/generate",
-                json={"model": self.model, "prompt": prompt, "stream": False},
+                json={"model": chosen_model, "prompt": prompt, "stream": False},
                 timeout=90,
             )
             r.raise_for_status()
@@ -41,7 +42,7 @@ class AIInterpreter:
             self.calls += 1
             self.usage.append({
                 "provider": "ollama",
-                "model": self.model,
+                "model": chosen_model,
                 "input_tokens": int(data.get("prompt_eval_count") or 0),
                 "output_tokens": int(data.get("eval_count") or 0),
             })
