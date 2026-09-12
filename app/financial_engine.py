@@ -101,7 +101,24 @@ class FinancialEngine:
         return Simulation(shortfall <= 1e-7, minimum, balance, shortfall)
 
     def option_payments(self, option: pd.Series) -> list[Payment]:
-        first = pd.Timestamp(option.first_payment_date); n = int(option.number_of_payments); amount = float(option.payment_amount); freq = int(option.payment_frequency_days)
+        """Convert a supplied payment option into payments.
+
+        The official dataset contains a small number of malformed/orphan option
+        rows with missing schedule fields. Such rows are not usable payment
+        plans and must be ignored rather than crashing the complete evaluation.
+        """
+        required = ("first_payment_date", "number_of_payments", "payment_amount", "payment_frequency_days")
+        if any(col not in option.index or pd.isna(option[col]) for col in required):
+            return []
+        try:
+            first = pd.Timestamp(option.first_payment_date)
+            n = int(option.number_of_payments)
+            amount = float(option.payment_amount)
+            freq = int(option.payment_frequency_days)
+        except (TypeError, ValueError, OverflowError):
+            return []
+        if pd.isna(first) or n <= 0 or not math.isfinite(amount) or amount <= 0 or freq <= 0:
+            return []
         return [Payment(first + timedelta(days=i * freq), amount, str(option.payment_option_id)) for i in range(n)]
 
     def accepted_methods(self, profile: pd.Series) -> set[str]: return self._cats(profile.payment_methods_user_will_consider)
