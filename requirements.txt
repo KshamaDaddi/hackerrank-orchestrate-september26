@@ -1,0 +1,7 @@
+pandas>=2.2,<3
+numpy>=1.26,<3
+scikit-learn>=1.5,<2
+Pillow>=10,<12
+pytesseract>=0.3.13,<0.4
+requests>=2.32,<3
+pydantic>=2.8,<3
