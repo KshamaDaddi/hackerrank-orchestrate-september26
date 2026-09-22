@@ -472,3 +472,18 @@ The decision engine and verifier have different responsibilities. Independent va
 **FinAgent-AI**  
 HackerRank Orchestrate — September 2026  
 Challenge: **Buy or Wait?**
+
+## Interactive UI
+
+FinAgent-AI includes an optional Streamlit dashboard for demonstrating the same decision engine used by the competition entry point.
+
+### Run the dashboard
+
+```bash
+pip install -r requirements-ui.txt
+streamlit run ui/dashboard.py
+```
+
+The dashboard provides request-level affordability analysis, safe-to-pay amount, payment plans, a 90-day cash-flow chart, flexible-spending changes, verifier/audit information, and dataset metrics.
+
+The UI is a demonstration layer. It does not replace or alter `code/main.py` or the competition output pipeline.
